@@ -13,11 +13,6 @@ RestartSec=5
 LimitNOFILE=65536
 LimitMEMLOCK=infinity
 
-ProtectSystem=strict
-ReadWritePaths=/var/cache/s3gw
-ReadWritePaths=/mnt/s3
-
-PrivateTmp=true
 NoNewPrivileges=true
 
 [Install]

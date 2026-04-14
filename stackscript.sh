@@ -255,16 +255,6 @@ YAML
 configure_systemd_service() {
     echo ">>> Configuring systemd service..."
 
-    local rw_paths="ReadWritePaths=${CACHE_DIR}"
-    rw_paths="${rw_paths}\nReadWritePaths=${MOUNT_BASE}"
-
-    mkdir -p /etc/systemd/system/s3gw.service.d
-    cat > /etc/systemd/system/s3gw.service.d/override.conf <<EOF
-[Service]
-ReadWritePaths=${CACHE_DIR}
-ReadWritePaths=${MOUNT_BASE}
-EOF
-
     systemctl daemon-reload
     systemctl enable s3gw
 }
@@ -339,8 +329,10 @@ add_samba_share() {
    browsable = yes
    writable = yes
    valid users = ${SAMBA_USER}
-   create mask = 0644
-   directory mask = 0755
+   force user = root
+   force group = root
+   create mask = 0666
+   directory mask = 0777
 EOF
 }
 
