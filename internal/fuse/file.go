@@ -30,6 +30,7 @@ func (f *FileNode) Access(ctx context.Context, mask uint32) syscall.Errno {
 
 func (f *FileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *gofuse.AttrOut) syscall.Errno {
 	out.Mode = 0666
+	out.Nlink = 1
 	out.Size = uint64(f.size)
 	out.SetTimes(&f.mtime, &f.mtime, &f.mtime)
 	out.AttrValid = 1
@@ -41,6 +42,7 @@ func (f *FileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *gofuse.Set
 		f.size = int64(sz)
 	}
 	out.Mode = 0666
+	out.Nlink = 1
 	out.Size = uint64(f.size)
 	out.SetTimes(&f.mtime, &f.mtime, &f.mtime)
 	return 0

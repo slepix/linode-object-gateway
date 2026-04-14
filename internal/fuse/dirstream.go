@@ -2,6 +2,7 @@ package fuse
 
 import (
 	"context"
+	"hash/fnv"
 	"log/slog"
 	"path"
 	"strings"
@@ -10,6 +11,12 @@ import (
 	gofuse "github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/s3gateway/internal/s3client"
 )
+
+func stableIno(name string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(name))
+	return h.Sum64()
+}
 
 type S3DirStream struct {
 	s3      *s3client.Client
@@ -68,6 +75,7 @@ func (s *S3DirStream) fetchPage() error {
 		}
 		s.entries = append(s.entries, gofuse.DirEntry{
 			Name: name,
+			Ino:  stableIno(cp),
 			Mode: syscall.S_IFDIR,
 		})
 	}
@@ -82,6 +90,7 @@ func (s *S3DirStream) fetchPage() error {
 		}
 		s.entries = append(s.entries, gofuse.DirEntry{
 			Name: name,
+			Ino:  stableIno(obj.Key),
 			Mode: syscall.S_IFREG,
 		})
 	}

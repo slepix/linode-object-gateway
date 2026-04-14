@@ -60,7 +60,7 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 		now := time.Now()
 		out.SetTimes(&now, &now, &now)
 		out.EntryValid = 1
-		stable := fs.StableAttr{Mode: syscall.S_IFDIR}
+		stable := fs.StableAttr{Mode: syscall.S_IFDIR, Ino: stableIno(dirPrefix)}
 		return d.NewInode(ctx, child, stable), 0
 	}
 
@@ -74,17 +74,18 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 	}
 
 	child := &FileNode{
-		bctx: d.bctx,
-		key:  childKey,
-		size: meta.Size,
-		etag: meta.ETag,
+		bctx:  d.bctx,
+		key:   childKey,
+		size:  meta.Size,
+		etag:  meta.ETag,
 		mtime: meta.LastModified,
 	}
 	out.Mode = 0666
+	out.Nlink = 1
 	out.Size = uint64(meta.Size)
 	out.SetTimes(&meta.LastModified, &meta.LastModified, &meta.LastModified)
 	out.EntryValid = 1
-	stable := fs.StableAttr{Mode: syscall.S_IFREG}
+	stable := fs.StableAttr{Mode: syscall.S_IFREG, Ino: stableIno(childKey)}
 	return d.NewInode(ctx, child, stable), 0
 }
 
@@ -117,7 +118,7 @@ func (d *DirNode) Mkdir(ctx context.Context, name string, mode uint32, out *gofu
 	now := time.Now()
 	out.SetTimes(&now, &now, &now)
 	out.EntryValid = 1
-	stable := fs.StableAttr{Mode: syscall.S_IFDIR}
+	stable := fs.StableAttr{Mode: syscall.S_IFDIR, Ino: stableIno(markerKey)}
 	return d.NewInode(ctx, child, stable), 0
 }
 
@@ -138,11 +139,12 @@ func (d *DirNode) Create(ctx context.Context, name string, flags uint32, mode ui
 	}
 
 	out.Mode = 0666
+	out.Nlink = 1
 	out.Size = 0
 	now := time.Now()
 	out.SetTimes(&now, &now, &now)
 	out.EntryValid = 1
-	stable := fs.StableAttr{Mode: syscall.S_IFREG}
+	stable := fs.StableAttr{Mode: syscall.S_IFREG, Ino: stableIno(key)}
 	inode = d.NewInode(ctx, child, stable)
 	return inode, handle, gofuse.FOPEN_DIRECT_IO, 0
 }

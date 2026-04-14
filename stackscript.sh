@@ -333,6 +333,16 @@ add_samba_share() {
    force group = root
    create mask = 0666
    directory mask = 0777
+   kernel share modes = no
+   kernel oplocks = no
+   posix locking = no
+   strict locking = no
+   store dos attributes = no
+   map archive = no
+   map hidden = no
+   map readonly = no
+   map system = no
+   ea support = no
 EOF
 }
 
