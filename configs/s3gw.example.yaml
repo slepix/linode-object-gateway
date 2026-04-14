@@ -1,0 +1,22 @@
+cache_dir: /var/cache/s3gw
+max_cache_size: 10737418240  # 10 GB
+default_ttl: 5m
+log_level: info
+
+buckets:
+  - name: media-assets
+    region: us-east-1
+    endpoint: https://us-east-1.linodeobjects.com
+    access_key: YOUR_ACCESS_KEY
+    secret_key: YOUR_SECRET_KEY
+    mount_point: /mnt/s3/media
+    ttl: 15m
+    sole_writer: true
+
+  - name: shared-documents
+    region: eu-central-1
+    endpoint: https://eu-central-1.linodeobjects.com
+    access_key: YOUR_ACCESS_KEY
+    secret_key: YOUR_SECRET_KEY
+    mount_point: /mnt/s3/docs
+    sole_writer: false

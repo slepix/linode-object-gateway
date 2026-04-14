@@ -1,0 +1,24 @@
+[Unit]
+Description=S3 Gateway - FUSE filesystem for S3-compatible object storage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/s3gw --config /etc/s3gw/config.yaml
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=5
+
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+ProtectSystem=strict
+ReadWritePaths=/var/cache/s3gw
+ReadWritePaths=/mnt/s3
+
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
