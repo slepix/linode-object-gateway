@@ -22,6 +22,11 @@ type FileNode struct {
 var _ = (fs.NodeGetattrer)((*FileNode)(nil))
 var _ = (fs.NodeSetattrer)((*FileNode)(nil))
 var _ = (fs.NodeOpener)((*FileNode)(nil))
+var _ = (fs.NodeAccesser)((*FileNode)(nil))
+
+func (f *FileNode) Access(ctx context.Context, mask uint32) syscall.Errno {
+	return 0
+}
 
 func (f *FileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *gofuse.AttrOut) syscall.Errno {
 	out.Mode = 0666

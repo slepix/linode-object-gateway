@@ -26,9 +26,14 @@ var _ = (fs.NodeUnlinker)((*DirNode)(nil))
 var _ = (fs.NodeRmdirer)((*DirNode)(nil))
 var _ = (fs.NodeRenamer)((*DirNode)(nil))
 var _ = (fs.NodeGetattrer)((*DirNode)(nil))
+var _ = (fs.NodeAccesser)((*DirNode)(nil))
 
 func (d *DirNode) ttlDuration() time.Duration {
 	return time.Duration(d.bctx.ttl)
+}
+
+func (d *DirNode) Access(ctx context.Context, mask uint32) syscall.Errno {
+	return 0
 }
 
 func (d *DirNode) Getattr(ctx context.Context, fh fs.FileHandle, out *gofuse.AttrOut) syscall.Errno {
