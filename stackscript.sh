@@ -148,6 +148,10 @@ install_system_packages() {
         wget \
         ufw
 
+    if ! grep -q "^user_allow_other" /etc/fuse.conf 2>/dev/null; then
+        echo "user_allow_other" >> /etc/fuse.conf
+    fi
+
     if [ "$SHARING_PROTOCOL" = "nfs" ] || [ "$SHARING_PROTOCOL" = "both" ]; then
         echo ">>> Installing NFS server..."
         DEBIAN_FRONTEND=noninteractive apt-get install -y nfs-kernel-server

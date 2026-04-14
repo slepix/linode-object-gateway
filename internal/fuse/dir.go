@@ -32,7 +32,7 @@ func (d *DirNode) ttlDuration() time.Duration {
 }
 
 func (d *DirNode) Getattr(ctx context.Context, fh fs.FileHandle, out *gofuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0777 | syscall.S_IFDIR
 	out.Nlink = 2
 	now := time.Now()
 	out.SetTimes(&now, &now, &now)
@@ -50,7 +50,7 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 			bctx:   d.bctx,
 			prefix: dirPrefix,
 		}
-		out.Mode = 0755 | syscall.S_IFDIR
+		out.Mode = 0777 | syscall.S_IFDIR
 		out.Nlink = 2
 		now := time.Now()
 		out.SetTimes(&now, &now, &now)
@@ -75,7 +75,7 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 		etag: meta.ETag,
 		mtime: meta.LastModified,
 	}
-	out.Mode = 0644
+	out.Mode = 0666
 	out.Size = uint64(meta.Size)
 	out.SetTimes(&meta.LastModified, &meta.LastModified, &meta.LastModified)
 	out.EntryValid = 1
@@ -107,7 +107,7 @@ func (d *DirNode) Mkdir(ctx context.Context, name string, mode uint32, out *gofu
 		bctx:   d.bctx,
 		prefix: markerKey,
 	}
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0777 | syscall.S_IFDIR
 	out.Nlink = 2
 	now := time.Now()
 	out.SetTimes(&now, &now, &now)
@@ -132,7 +132,7 @@ func (d *DirNode) Create(ctx context.Context, name string, flags uint32, mode ui
 		return nil, nil, 0, syscall.EIO
 	}
 
-	out.Mode = 0644
+	out.Mode = 0666
 	out.Size = 0
 	now := time.Now()
 	out.SetTimes(&now, &now, &now)

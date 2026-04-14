@@ -57,6 +57,7 @@ func (bm *BucketMount) Start() error {
 			DisableXAttrs: true,
 			MaxReadAhead:  128 * 1024,
 			DirectMount:   true,
+			AllowOther:    true,
 		},
 		AttrTimeout:  &bm.ttl,
 		EntryTimeout: &bm.ttl,
