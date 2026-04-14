@@ -46,6 +46,42 @@ CONFIG_DIR="/etc/s3gw"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 MOUNT_BASE="/mnt/s3"
 
+trim() {
+    local val="$1"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    echo "$val"
+}
+
+BUCKET1_NAME="$(trim "$BUCKET1_NAME")"
+BUCKET1_REGION="$(trim "$BUCKET1_REGION")"
+BUCKET1_ACCESS_KEY="$(trim "$BUCKET1_ACCESS_KEY")"
+BUCKET1_SECRET_KEY="$(trim "$BUCKET1_SECRET_KEY")"
+BUCKET1_TTL="$(trim "$BUCKET1_TTL")"
+BUCKET1_SOLE_WRITER="$(trim "$BUCKET1_SOLE_WRITER")"
+
+BUCKET2_NAME="$(trim "$BUCKET2_NAME")"
+BUCKET2_REGION="$(trim "$BUCKET2_REGION")"
+BUCKET2_ACCESS_KEY="$(trim "$BUCKET2_ACCESS_KEY")"
+BUCKET2_SECRET_KEY="$(trim "$BUCKET2_SECRET_KEY")"
+BUCKET2_TTL="$(trim "$BUCKET2_TTL")"
+BUCKET2_SOLE_WRITER="$(trim "$BUCKET2_SOLE_WRITER")"
+
+BUCKET3_NAME="$(trim "$BUCKET3_NAME")"
+BUCKET3_REGION="$(trim "$BUCKET3_REGION")"
+BUCKET3_ACCESS_KEY="$(trim "$BUCKET3_ACCESS_KEY")"
+BUCKET3_SECRET_KEY="$(trim "$BUCKET3_SECRET_KEY")"
+BUCKET3_TTL="$(trim "$BUCKET3_TTL")"
+BUCKET3_SOLE_WRITER="$(trim "$BUCKET3_SOLE_WRITER")"
+
+CACHE_SIZE_GB="$(trim "$CACHE_SIZE_GB")"
+DEFAULT_TTL="$(trim "$DEFAULT_TTL")"
+LOG_LEVEL="$(trim "$LOG_LEVEL")"
+SHARING_PROTOCOL="$(trim "$SHARING_PROTOCOL")"
+NFS_ALLOWED_NETWORK="$(trim "$NFS_ALLOWED_NETWORK")"
+SAMBA_USER="$(trim "$SAMBA_USER")"
+SAMBA_PASSWORD="$(trim "$SAMBA_PASSWORD")"
+
 validate_inputs() {
     local errors=0
 
