@@ -137,6 +137,7 @@ func (d *DirNode) Create(ctx context.Context, name string, flags uint32, mode ui
 		slog.Error("create handle failed", "key", key, "error", err)
 		return nil, nil, 0, syscall.EIO
 	}
+	handle.dirty = true
 
 	out.Mode = 0666
 	out.Nlink = 1
