@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	gofuse "github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/s3gateway/internal/catalog"
 	"github.com/s3gateway/internal/s3client"
 )
 
@@ -18,6 +19,44 @@ func stableIno(name string) uint64 {
 	return h.Sum64()
 }
 
+// catalogDirStream serves entries from the catalog (SQLite).
+type catalogDirStream struct {
+	entries []gofuse.DirEntry
+	pos     int
+}
+
+func newCatalogDirStream(catEntries []catalog.Entry) *catalogDirStream {
+	fuseEntries := make([]gofuse.DirEntry, 0, len(catEntries))
+	for _, e := range catEntries {
+		mode := uint32(syscall.S_IFREG)
+		if e.IsDir {
+			mode = syscall.S_IFDIR
+		}
+		fuseEntries = append(fuseEntries, gofuse.DirEntry{
+			Name: e.Name,
+			Ino:  stableIno(e.Key),
+			Mode: mode,
+		})
+	}
+	return &catalogDirStream{entries: fuseEntries}
+}
+
+func (s *catalogDirStream) HasNext() bool {
+	return s.pos < len(s.entries)
+}
+
+func (s *catalogDirStream) Next() (gofuse.DirEntry, syscall.Errno) {
+	if s.pos >= len(s.entries) {
+		return gofuse.DirEntry{}, syscall.EIO
+	}
+	entry := s.entries[s.pos]
+	s.pos++
+	return entry, 0
+}
+
+func (s *catalogDirStream) Close() {}
+
+// S3DirStream is the original paginated S3 directory stream (fallback).
 type S3DirStream struct {
 	s3      *s3client.Client
 	bucket  string

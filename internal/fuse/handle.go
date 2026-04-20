@@ -11,6 +11,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	gofuse "github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/s3gateway/internal/catalog"
 	"github.com/s3gateway/internal/s3client"
 )
 
@@ -166,7 +167,72 @@ func (h *Handle) Flush(ctx context.Context) syscall.Errno {
 	}
 	size := stat.Size()
 
-	objMeta, err := h.s3.PutObject(ctx, h.key, h.tmpFile, size)
+	wb := h.file.bctx.writeBack
+	if wb != nil {
+		// Write-back mode: copy tmpFile to a staging file and submit async
+		stagingFile, err := os.CreateTemp("", "s3gw-wb-*")
+		if err != nil {
+			slog.Error("create staging file failed", "key", h.key, "error", err)
+			return syscall.EIO
+		}
+
+		if _, err := io.Copy(stagingFile, h.tmpFile); err != nil {
+			stagingFile.Close()
+			os.Remove(stagingFile.Name())
+			slog.Error("copy to staging failed", "key", h.key, "error", err)
+			return syscall.EIO
+		}
+		stagingFile.Close()
+
+		// Update catalog immediately to reflect the new file
+		parent, baseName := catalog.SplitKeyExported(h.key)
+		h.file.bctx.catalog.Put(h.bucket, &catalog.Entry{
+			Key:      h.key,
+			Parent:   parent,
+			Name:     baseName,
+			Size:     size,
+			Modified: time.Now(),
+		})
+
+		// Cache the file locally
+		cacheFile, openErr := os.Open(stagingFile.Name())
+		if openErr == nil {
+			dummyMeta := s3client.ObjectMeta{Size: size, LastModified: time.Now()}
+			if putErr := h.file.bctx.cache.Put(h.bucket, h.key, cacheFile, dummyMeta); putErr != nil {
+				slog.Warn("cache put on write-back failed", "key", h.key, "error", putErr)
+			}
+			cacheFile.Close()
+		}
+
+		h.file.size = size
+		h.file.mtime = time.Now()
+		h.dirty = false
+
+		job := &catalog.UploadJob{
+			Bucket:   h.bucket,
+			Key:      h.key,
+			FilePath: stagingFile.Name(),
+			Size:     size,
+		}
+
+		if err := wb.Submit(job); err != nil {
+			slog.Warn("write-back queue full, uploading synchronously", "key", h.key)
+			return h.syncUpload(size)
+		}
+
+		return 0
+	}
+
+	return h.syncUpload(size)
+}
+
+func (h *Handle) syncUpload(size int64) syscall.Errno {
+	if _, err := h.tmpFile.Seek(0, io.SeekStart); err != nil {
+		slog.Error("seek failed on sync upload", "key", h.key, "error", err)
+		return syscall.EIO
+	}
+
+	objMeta, err := h.s3.PutObject(context.Background(), h.key, h.tmpFile, size)
 	if err != nil {
 		slog.Error("S3 PUT FAILED - write rejected", "key", h.key, "error", err)
 		return syscall.EIO
@@ -179,6 +245,16 @@ func (h *Handle) Flush(ctx context.Context) syscall.Errno {
 		}
 		cacheFile.Close()
 	}
+
+	parent, baseName := catalog.SplitKeyExported(h.key)
+	h.file.bctx.catalog.Put(h.bucket, &catalog.Entry{
+		Key:      h.key,
+		Parent:   parent,
+		Name:     baseName,
+		Size:     size,
+		ETag:     objMeta.ETag,
+		Modified: time.Now(),
+	})
 
 	h.file.size = size
 	h.file.etag = objMeta.ETag

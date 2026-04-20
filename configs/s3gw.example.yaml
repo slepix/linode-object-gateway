@@ -3,6 +3,21 @@ max_cache_size: 10737418240  # 10 GB
 default_ttl: 5m
 log_level: info
 
+# Metadata catalog: SQLite-backed object index that eliminates most S3 list calls
+catalog:
+  sync_interval: 5m        # How often to re-sync full bucket metadata from S3
+  negative_cache_ttl: 5s   # How long to cache "file does not exist" results
+  dir_cache_ttl: 30s       # How long to cache directory listing results in memory
+  sync_concurrency: 4      # Max concurrent bucket syncs
+
+# Write-back: async uploads for faster write performance
+write_back:
+  enabled: true
+  workers: 4               # Number of background upload workers
+  queue_size: 1000         # Max pending uploads in queue
+  retry_delay: 5s          # Delay between upload retry attempts
+  max_retries: 3           # Max retries per failed upload
+
 buckets:
   - name: media-assets
     region: us-east-1

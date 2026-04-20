@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	gofuse "github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/s3gateway/internal/cache"
+	"github.com/s3gateway/internal/catalog"
 	"github.com/s3gateway/internal/config"
 	fuseimpl "github.com/s3gateway/internal/fuse"
 	"github.com/s3gateway/internal/s3client"
@@ -18,12 +19,14 @@ type BucketMount struct {
 	cfg        config.BucketConfig
 	s3         *s3client.Client
 	cache      *cache.Manager
+	catalog    *catalog.Catalog
+	writeBack  *catalog.WriteBackQueue
 	server     *gofuse.Server
 	ttl        time.Duration
 	mountPoint string
 }
 
-func NewBucketMount(bcfg config.BucketConfig, cm *cache.Manager, defaultTTL time.Duration) *BucketMount {
+func NewBucketMount(bcfg config.BucketConfig, cm *cache.Manager, cat *catalog.Catalog, wb *catalog.WriteBackQueue, defaultTTL time.Duration) *BucketMount {
 	ttl := bcfg.EffectiveTTL(defaultTTL)
 
 	s3c := s3client.NewClient(
@@ -38,6 +41,8 @@ func NewBucketMount(bcfg config.BucketConfig, cm *cache.Manager, defaultTTL time
 		cfg:        bcfg,
 		s3:         s3c,
 		cache:      cm,
+		catalog:    cat,
+		writeBack:  wb,
 		ttl:        ttl,
 		mountPoint: bcfg.MountPoint,
 	}
@@ -48,7 +53,7 @@ func (bm *BucketMount) Start() error {
 		return fmt.Errorf("create mount point %s: %w", bm.mountPoint, err)
 	}
 
-	root := fuseimpl.NewRoot(bm.s3, bm.cache, bm.cfg.Name, bm.ttl, bm.cfg.SoleWriter)
+	root := fuseimpl.NewRoot(bm.s3, bm.cache, bm.catalog, bm.writeBack, bm.cfg.Name, bm.ttl, bm.cfg.SoleWriter)
 
 	opts := &fs.Options{
 		MountOptions: gofuse.MountOptions{

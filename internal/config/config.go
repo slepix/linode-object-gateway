@@ -12,7 +12,24 @@ type Config struct {
 	MaxCacheSize int64          `yaml:"max_cache_size"`
 	DefaultTTL   Duration       `yaml:"default_ttl"`
 	LogLevel     string         `yaml:"log_level"`
+	Catalog      CatalogConfig  `yaml:"catalog"`
+	WriteBack    WriteBackConfig `yaml:"write_back"`
 	Buckets      []BucketConfig `yaml:"buckets"`
+}
+
+type CatalogConfig struct {
+	SyncInterval    Duration `yaml:"sync_interval"`
+	NegCacheTTL     Duration `yaml:"negative_cache_ttl"`
+	DirCacheTTL     Duration `yaml:"dir_cache_ttl"`
+	SyncConcurrency int      `yaml:"sync_concurrency"`
+}
+
+type WriteBackConfig struct {
+	Enabled    bool     `yaml:"enabled"`
+	Workers    int      `yaml:"workers"`
+	QueueSize  int      `yaml:"queue_size"`
+	RetryDelay Duration `yaml:"retry_delay"`
+	MaxRetries int      `yaml:"max_retries"`
 }
 
 type BucketConfig struct {
@@ -65,6 +82,19 @@ func Load(path string) (*Config, error) {
 		MaxCacheSize: 10 * 1024 * 1024 * 1024,
 		DefaultTTL:   Duration{5 * time.Minute},
 		LogLevel:     "info",
+		Catalog: CatalogConfig{
+			SyncInterval:    Duration{5 * time.Minute},
+			NegCacheTTL:     Duration{5 * time.Second},
+			DirCacheTTL:     Duration{30 * time.Second},
+			SyncConcurrency: 4,
+		},
+		WriteBack: WriteBackConfig{
+			Enabled:    true,
+			Workers:    4,
+			QueueSize:  1000,
+			RetryDelay: Duration{5 * time.Second},
+			MaxRetries: 3,
+		},
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {

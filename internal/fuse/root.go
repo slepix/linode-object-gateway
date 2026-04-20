@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	gofuse "github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/s3gateway/internal/cache"
+	"github.com/s3gateway/internal/catalog"
 	"github.com/s3gateway/internal/s3client"
 )
 
@@ -15,11 +16,13 @@ type RootNode struct {
 	DirNode
 }
 
-func NewRoot(s3c *s3client.Client, cm *cache.Manager, bucket string, ttl time.Duration, soleWriter bool) *RootNode {
+func NewRoot(s3c *s3client.Client, cm *cache.Manager, cat *catalog.Catalog, wb *catalog.WriteBackQueue, bucket string, ttl time.Duration, soleWriter bool) *RootNode {
 	root := &RootNode{}
 	root.bctx = &bucketCtx{
 		s3:         s3c,
 		cache:      cm,
+		catalog:    cat,
+		writeBack:  wb,
 		bucket:     bucket,
 		ttl:        int64(ttl),
 		soleWriter: soleWriter,

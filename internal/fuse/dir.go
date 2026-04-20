@@ -9,6 +9,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	gofuse "github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/s3gateway/internal/catalog"
 	"github.com/s3gateway/internal/s3client"
 )
 
@@ -28,10 +29,6 @@ var _ = (fs.NodeRenamer)((*DirNode)(nil))
 var _ = (fs.NodeGetattrer)((*DirNode)(nil))
 var _ = (fs.NodeAccesser)((*DirNode)(nil))
 
-func (d *DirNode) ttlDuration() time.Duration {
-	return time.Duration(d.bctx.ttl)
-}
-
 func (d *DirNode) Access(ctx context.Context, mask uint32) syscall.Errno {
 	return 0
 }
@@ -47,21 +44,31 @@ func (d *DirNode) Getattr(ctx context.Context, fh fs.FileHandle, out *gofuse.Att
 
 func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	childKey := d.prefix + name
+	cat := d.bctx.catalog
 
+	// Try catalog for directory
+	dirKey := childKey + "/"
+	if entry, err := cat.Lookup(d.bctx.bucket, dirKey); err == nil && entry != nil && entry.IsDir {
+		return d.makeDirInode(ctx, dirKey, out), 0
+	}
+
+	// Try catalog for directory by checking children
+	if has, err := cat.HasDir(d.bctx.bucket, dirKey); err == nil && has {
+		return d.makeDirInode(ctx, dirKey, out), 0
+	}
+
+	// Try catalog for file
+	if entry, err := cat.Lookup(d.bctx.bucket, childKey); err == nil && entry != nil && !entry.IsDir {
+		return d.makeFileInode(ctx, childKey, entry.Size, entry.ETag, entry.Modified, out), 0
+	}
+
+	// Catalog miss -- fall back to S3
 	dirPrefix := childKey + "/"
 	listResult, err := d.bctx.s3.ListObjects(ctx, dirPrefix, "/", nil)
 	if err == nil && (len(listResult.Objects) > 0 || len(listResult.CommonPrefixes) > 0) {
-		child := &DirNode{
-			bctx:   d.bctx,
-			prefix: dirPrefix,
-		}
-		out.Mode = 0777 | syscall.S_IFDIR
-		out.Nlink = 2
-		now := time.Now()
-		out.SetTimes(&now, &now, &now)
-		out.EntryValid = 1
-		stable := fs.StableAttr{Mode: syscall.S_IFDIR, Ino: stableIno(dirPrefix)}
-		return d.NewInode(ctx, child, stable), 0
+		// Populate catalog from the list result
+		d.ingestListResult(dirPrefix, listResult)
+		return d.makeDirInode(ctx, dirPrefix, out), 0
 	}
 
 	meta, err := d.bctx.s3.HeadObject(ctx, childKey)
@@ -73,30 +80,113 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 		return nil, s3client.TranslateError(err)
 	}
 
+	// Populate catalog with the discovered file
+	parent, baseName := catalog.SplitKeyExported(childKey)
+	cat.Put(d.bctx.bucket, &catalog.Entry{
+		Key:      childKey,
+		Parent:   parent,
+		Name:     baseName,
+		Size:     meta.Size,
+		ETag:     meta.ETag,
+		Modified: meta.LastModified,
+	})
+
+	return d.makeFileInode(ctx, childKey, meta.Size, meta.ETag, meta.LastModified, out), 0
+}
+
+func (d *DirNode) makeDirInode(ctx context.Context, prefix string, out *gofuse.EntryOut) *fs.Inode {
+	child := &DirNode{bctx: d.bctx, prefix: prefix}
+	out.Mode = 0777 | syscall.S_IFDIR
+	out.Nlink = 2
+	now := time.Now()
+	out.SetTimes(&now, &now, &now)
+	out.EntryValid = 1
+	stable := fs.StableAttr{Mode: syscall.S_IFDIR, Ino: stableIno(prefix)}
+	return d.NewInode(ctx, child, stable)
+}
+
+func (d *DirNode) makeFileInode(ctx context.Context, key string, size int64, etag string, mtime time.Time, out *gofuse.EntryOut) *fs.Inode {
 	child := &FileNode{
 		bctx:  d.bctx,
-		key:   childKey,
-		size:  meta.Size,
-		etag:  meta.ETag,
-		mtime: meta.LastModified,
+		key:   key,
+		size:  size,
+		etag:  etag,
+		mtime: mtime,
 	}
 	out.Mode = 0666
 	out.Nlink = 1
-	out.Size = uint64(meta.Size)
-	out.SetTimes(&meta.LastModified, &meta.LastModified, &meta.LastModified)
+	out.Size = uint64(size)
+	out.SetTimes(&mtime, &mtime, &mtime)
 	out.EntryValid = 1
-	stable := fs.StableAttr{Mode: syscall.S_IFREG, Ino: stableIno(childKey)}
-	return d.NewInode(ctx, child, stable), 0
+	stable := fs.StableAttr{Mode: syscall.S_IFREG, Ino: stableIno(key)}
+	return d.NewInode(ctx, child, stable)
+}
+
+func (d *DirNode) ingestListResult(prefix string, result *s3client.ListResult) {
+	cat := d.bctx.catalog
+	bucket := d.bctx.bucket
+
+	for _, cp := range result.CommonPrefixes {
+		parent, name := catalog.SplitKeyExported(cp)
+		cat.Put(bucket, &catalog.Entry{
+			Key:    cp,
+			Parent: parent,
+			Name:   name,
+			IsDir:  true,
+		})
+	}
+
+	for _, obj := range result.Objects {
+		if obj.Key == prefix || strings.HasSuffix(obj.Key, "/") {
+			continue
+		}
+		parent, name := catalog.SplitKeyExported(obj.Key)
+		cat.Put(bucket, &catalog.Entry{
+			Key:      obj.Key,
+			Parent:   parent,
+			Name:     name,
+			Size:     obj.Size,
+			ETag:     obj.ETag,
+			Modified: obj.LastModified,
+		})
+	}
 }
 
 func (d *DirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	stream := &S3DirStream{
-		s3:     d.bctx.s3,
-		bucket: d.bctx.bucket,
-		prefix: d.prefix,
-		ctx:    ctx,
+	cat := d.bctx.catalog
+
+	// Try catalog first
+	entries, err := cat.ListDir(d.bctx.bucket, d.prefix)
+	if err == nil && len(entries) > 0 {
+		return newCatalogDirStream(entries), 0
 	}
-	return stream, 0
+
+	// Catalog empty for this prefix -- sync from S3 then retry
+	if syncErr := cat.SyncPrefix(d.bctx.bucket, d.prefix); syncErr != nil {
+		slog.Warn("readdir sync prefix failed, falling back to S3 stream",
+			"prefix", d.prefix, "error", syncErr)
+		stream := &S3DirStream{
+			s3:     d.bctx.s3,
+			bucket: d.bctx.bucket,
+			prefix: d.prefix,
+			ctx:    ctx,
+		}
+		return stream, 0
+	}
+
+	entries, err = cat.ListDir(d.bctx.bucket, d.prefix)
+	if err != nil {
+		slog.Error("readdir catalog list failed", "prefix", d.prefix, "error", err)
+		stream := &S3DirStream{
+			s3:     d.bctx.s3,
+			bucket: d.bctx.bucket,
+			prefix: d.prefix,
+			ctx:    ctx,
+		}
+		return stream, 0
+	}
+
+	return newCatalogDirStream(entries), 0
 }
 
 func (d *DirNode) Mkdir(ctx context.Context, name string, mode uint32, out *gofuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -109,17 +199,15 @@ func (d *DirNode) Mkdir(ctx context.Context, name string, mode uint32, out *gofu
 		return nil, s3client.TranslateError(err)
 	}
 
-	child := &DirNode{
-		bctx:   d.bctx,
-		prefix: markerKey,
-	}
-	out.Mode = 0777 | syscall.S_IFDIR
-	out.Nlink = 2
-	now := time.Now()
-	out.SetTimes(&now, &now, &now)
-	out.EntryValid = 1
-	stable := fs.StableAttr{Mode: syscall.S_IFDIR, Ino: stableIno(markerKey)}
-	return d.NewInode(ctx, child, stable), 0
+	parent, baseName := catalog.SplitKeyExported(markerKey)
+	d.bctx.catalog.Put(d.bctx.bucket, &catalog.Entry{
+		Key:    markerKey,
+		Parent: parent,
+		Name:   baseName,
+		IsDir:  true,
+	})
+
+	return d.makeDirInode(ctx, markerKey, out), 0
 }
 
 func (d *DirNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *gofuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
@@ -138,6 +226,15 @@ func (d *DirNode) Create(ctx context.Context, name string, flags uint32, mode ui
 		return nil, nil, 0, syscall.EIO
 	}
 	handle.dirty = true
+
+	parent, baseName := catalog.SplitKeyExported(key)
+	d.bctx.catalog.Put(d.bctx.bucket, &catalog.Entry{
+		Key:      key,
+		Parent:   parent,
+		Name:     baseName,
+		Size:     0,
+		Modified: child.mtime,
+	})
 
 	out.Mode = 0666
 	out.Nlink = 1
@@ -159,6 +256,7 @@ func (d *DirNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	}
 
 	d.bctx.cache.Invalidate(d.bctx.bucket, key)
+	d.bctx.catalog.Delete(d.bctx.bucket, key)
 	return 0
 }
 
@@ -190,6 +288,7 @@ func (d *DirNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return s3client.TranslateError(err)
 	}
 
+	d.bctx.catalog.DeletePrefix(d.bctx.bucket, dirPrefix)
 	return 0
 }
 
@@ -218,6 +317,8 @@ func (d *DirNode) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 
 	d.bctx.cache.Invalidate(d.bctx.bucket, srcKey)
 	d.bctx.cache.Invalidate(d.bctx.bucket, dstKey)
+	d.bctx.catalog.Delete(d.bctx.bucket, srcKey)
+	d.bctx.catalog.Delete(d.bctx.bucket, dstKey)
 
 	return 0
 }

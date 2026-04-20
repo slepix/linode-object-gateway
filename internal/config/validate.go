@@ -19,6 +19,30 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("at least one bucket must be configured")
 	}
 
+	if cfg.Catalog.SyncInterval.Duration <= 0 {
+		return fmt.Errorf("catalog.sync_interval must be positive")
+	}
+	if cfg.Catalog.NegCacheTTL.Duration < 0 {
+		return fmt.Errorf("catalog.negative_cache_ttl must not be negative")
+	}
+	if cfg.Catalog.DirCacheTTL.Duration < 0 {
+		return fmt.Errorf("catalog.dir_cache_ttl must not be negative")
+	}
+	if cfg.Catalog.SyncConcurrency <= 0 {
+		return fmt.Errorf("catalog.sync_concurrency must be positive")
+	}
+	if cfg.WriteBack.Enabled {
+		if cfg.WriteBack.Workers <= 0 {
+			return fmt.Errorf("write_back.workers must be positive")
+		}
+		if cfg.WriteBack.QueueSize <= 0 {
+			return fmt.Errorf("write_back.queue_size must be positive")
+		}
+		if cfg.WriteBack.MaxRetries < 0 {
+			return fmt.Errorf("write_back.max_retries must not be negative")
+		}
+	}
+
 	mountPoints := make(map[string]bool)
 	bucketNames := make(map[string]bool)
 

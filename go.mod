@@ -8,7 +8,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.3
 	github.com/hanwen/go-fuse/v2 v2.5.1
 	go.etcd.io/bbolt v1.3.10
+	golang.org/x/sync v0.7.0
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.29.5
 )
 
 require (
