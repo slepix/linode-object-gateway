@@ -25,6 +25,17 @@
 # <UDF name="default_ttl" Label="Default Cache TTL" default="5m" example="Fallback TTL for buckets without a specific TTL" />
 # <UDF name="log_level" Label="Log Level" oneOf="debug,info,warn,error" default="info" />
 
+# <UDF name="catalog_sync_interval" Label="Catalog - Sync Interval" default="5m" example="How often to re-sync metadata from S3 (e.g. 5m, 1h)" />
+# <UDF name="catalog_neg_cache_ttl" Label="Catalog - Negative Cache TTL" default="5s" example="How long to cache 'not found' results (e.g. 5s, 30s)" />
+# <UDF name="catalog_dir_cache_ttl" Label="Catalog - Directory Cache TTL" default="30s" example="How long to cache directory listings in memory" />
+# <UDF name="catalog_sync_concurrency" Label="Catalog - Sync Concurrency" default="4" example="Max concurrent bucket syncs" />
+
+# <UDF name="writeback_enabled" Label="Write-Back - Enabled" oneOf="true,false" default="true" />
+# <UDF name="writeback_workers" Label="Write-Back - Workers" default="4" example="Number of background upload workers" />
+# <UDF name="writeback_queue_size" Label="Write-Back - Queue Size" default="1000" example="Max pending uploads in queue" />
+# <UDF name="writeback_retry_delay" Label="Write-Back - Retry Delay" default="5s" example="Delay between upload retry attempts" />
+# <UDF name="writeback_max_retries" Label="Write-Back - Max Retries" default="3" example="Max retries per failed upload" />
+
 # <UDF name="sharing_protocol" Label="File Sharing Protocol" oneOf="nfs,samba,both" />
 # <UDF name="nfs_allowed_network" Label="NFS - Allowed Network CIDR" default="10.0.0.0/8" example="Network allowed to mount NFS shares" />
 # <UDF name="samba_user" Label="Samba - Username" default="" example="Required if Samba or Both is selected" />
@@ -77,6 +88,18 @@ BUCKET3_SOLE_WRITER="$(trim "$BUCKET3_SOLE_WRITER")"
 CACHE_SIZE_GB="$(trim "$CACHE_SIZE_GB")"
 DEFAULT_TTL="$(trim "$DEFAULT_TTL")"
 LOG_LEVEL="$(trim "$LOG_LEVEL")"
+
+CATALOG_SYNC_INTERVAL="$(trim "$CATALOG_SYNC_INTERVAL")"
+CATALOG_NEG_CACHE_TTL="$(trim "$CATALOG_NEG_CACHE_TTL")"
+CATALOG_DIR_CACHE_TTL="$(trim "$CATALOG_DIR_CACHE_TTL")"
+CATALOG_SYNC_CONCURRENCY="$(trim "$CATALOG_SYNC_CONCURRENCY")"
+
+WRITEBACK_ENABLED="$(trim "$WRITEBACK_ENABLED")"
+WRITEBACK_WORKERS="$(trim "$WRITEBACK_WORKERS")"
+WRITEBACK_QUEUE_SIZE="$(trim "$WRITEBACK_QUEUE_SIZE")"
+WRITEBACK_RETRY_DELAY="$(trim "$WRITEBACK_RETRY_DELAY")"
+WRITEBACK_MAX_RETRIES="$(trim "$WRITEBACK_MAX_RETRIES")"
+
 SHARING_PROTOCOL="$(trim "$SHARING_PROTOCOL")"
 NFS_ALLOWED_NETWORK="$(trim "$NFS_ALLOWED_NETWORK")"
 SAMBA_USER="$(trim "$SAMBA_USER")"
@@ -182,6 +205,9 @@ build_and_install_s3gw() {
     git clone "$REPO_URL" "$build_dir"
     cd "$build_dir"
 
+    echo ">>> Resolving Go module dependencies..."
+    go mod tidy
+
     echo ">>> Building s3gw..."
     make build
 
@@ -207,6 +233,19 @@ cache_dir: ${CACHE_DIR}
 max_cache_size: ${cache_bytes}
 default_ttl: ${DEFAULT_TTL}
 log_level: ${LOG_LEVEL}
+
+catalog:
+  sync_interval: ${CATALOG_SYNC_INTERVAL}
+  negative_cache_ttl: ${CATALOG_NEG_CACHE_TTL}
+  dir_cache_ttl: ${CATALOG_DIR_CACHE_TTL}
+  sync_concurrency: ${CATALOG_SYNC_CONCURRENCY}
+
+write_back:
+  enabled: ${WRITEBACK_ENABLED}
+  workers: ${WRITEBACK_WORKERS}
+  queue_size: ${WRITEBACK_QUEUE_SIZE}
+  retry_delay: ${WRITEBACK_RETRY_DELAY}
+  max_retries: ${WRITEBACK_MAX_RETRIES}
 
 buckets:
 YAML
