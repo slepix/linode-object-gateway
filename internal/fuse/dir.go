@@ -19,6 +19,11 @@ type DirNode struct {
 	prefix string
 }
 
+type lookupResult struct {
+	isDir bool
+	meta  *s3client.ObjectMeta
+}
+
 var _ = (fs.NodeLookuper)((*DirNode)(nil))
 var _ = (fs.NodeReaddirer)((*DirNode)(nil))
 var _ = (fs.NodeMkdirer)((*DirNode)(nil))
@@ -77,26 +82,37 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 		return d.makeFileInode(ctx, childKey, entry.Size, entry.ETag, entry.Modified, out), 0
 	}
 
-	// Catalog miss -- fall back to S3
+	// Catalog miss -- fall back to S3. Dedupe concurrent fallbacks for the
+	// same child so a thundering herd collapses into a single round-trip.
 	dirPrefix := childKey + "/"
-	listResult, listErr := d.bctx.s3.ListObjects(ctx, dirPrefix, "/", nil)
-	if listErr != nil {
-		slog.Error("lookup list failed", "prefix", dirPrefix, "error", listErr)
-		return nil, s3client.TranslateError(listErr)
-	}
-	if len(listResult.Objects) > 0 || len(listResult.CommonPrefixes) > 0 {
-		d.ingestListResult(dirPrefix, listResult)
-		return d.makeDirInode(ctx, dirPrefix, out), 0
-	}
-
-	meta, err := d.bctx.s3.HeadObject(ctx, childKey)
-	if err != nil {
-		if d.bctx.s3.IsNotFound(err) {
+	sfKey := "lookup:" + d.bctx.bucket + "/" + childKey
+	resI, sfErr, _ := d.bctx.s3SF.Do(sfKey, func() (interface{}, error) {
+		listResult, listErr := d.bctx.s3.ListObjects(ctx, dirPrefix, "/", nil)
+		if listErr != nil {
+			return nil, listErr
+		}
+		if len(listResult.Objects) > 0 || len(listResult.CommonPrefixes) > 0 {
+			d.ingestListResult(dirPrefix, listResult)
+			return lookupResult{isDir: true}, nil
+		}
+		meta, headErr := d.bctx.s3.HeadObject(ctx, childKey)
+		if headErr != nil {
+			return nil, headErr
+		}
+		return lookupResult{meta: meta}, nil
+	})
+	if sfErr != nil {
+		if d.bctx.s3.IsNotFound(sfErr) {
 			return nil, syscall.ENOENT
 		}
-		slog.Error("lookup head failed", "key", childKey, "error", err)
-		return nil, s3client.TranslateError(err)
+		slog.Error("lookup fallback failed", "key", childKey, "error", sfErr)
+		return nil, s3client.TranslateError(sfErr)
 	}
+	res := resI.(lookupResult)
+	if res.isDir {
+		return d.makeDirInode(ctx, dirPrefix, out), 0
+	}
+	meta := res.meta
 
 	// Populate catalog with the discovered file
 	parent, baseName := catalog.SplitKeyExported(childKey)
@@ -144,9 +160,11 @@ func (d *DirNode) ingestListResult(prefix string, result *s3client.ListResult) {
 	cat := d.bctx.catalog
 	bucket := d.bctx.bucket
 
+	entries := make([]catalog.Entry, 0, len(result.CommonPrefixes)+len(result.Objects))
+
 	for _, cp := range result.CommonPrefixes {
 		parent, name := catalog.SplitKeyExported(cp)
-		cat.Put(bucket, &catalog.Entry{
+		entries = append(entries, catalog.Entry{
 			Key:    cp,
 			Parent: parent,
 			Name:   name,
@@ -159,7 +177,7 @@ func (d *DirNode) ingestListResult(prefix string, result *s3client.ListResult) {
 			continue
 		}
 		parent, name := catalog.SplitKeyExported(obj.Key)
-		cat.Put(bucket, &catalog.Entry{
+		entries = append(entries, catalog.Entry{
 			Key:      obj.Key,
 			Parent:   parent,
 			Name:     name,
@@ -167,6 +185,13 @@ func (d *DirNode) ingestListResult(prefix string, result *s3client.ListResult) {
 			ETag:     obj.ETag,
 			Modified: obj.LastModified,
 		})
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+	if err := cat.PutBatch(bucket, entries); err != nil {
+		slog.Warn("ingest batch failed", "prefix", prefix, "error", err)
 	}
 }
 

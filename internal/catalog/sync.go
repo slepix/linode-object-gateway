@@ -95,19 +95,65 @@ func (sm *SyncManager) syncAll() {
 func (sm *SyncManager) syncBucket(bucket string, s3c *s3client.Client) error {
 	start := time.Now()
 
+	// Sync the root with delimiter="/" first. This gives us the top-level
+	// objects and common prefixes cheaply, without descending into every
+	// subtree in the bucket.
+	totalSynced, err := sm.syncOnePrefix(bucket, s3c, "")
+	if err != nil {
+		return err
+	}
+
+	// Then refresh prefixes the user has actually touched. We iterate a
+	// snapshot so new dirs added mid-sync don't extend this pass.
+	knownDirs, err := sm.store.KnownDirs(bucket)
+	if err != nil {
+		slog.Warn("list known dirs failed", "bucket", bucket, "error", err)
+		knownDirs = nil
+	}
+	for _, dir := range knownDirs {
+		if dir == "" {
+			continue
+		}
+		select {
+		case <-sm.stopCh:
+			return nil
+		default:
+		}
+		n, err := sm.syncOnePrefix(bucket, s3c, dir)
+		if err != nil {
+			slog.Warn("sync prefix failed", "bucket", bucket, "prefix", dir, "error", err)
+			continue
+		}
+		totalSynced += n
+	}
+
+	if err := sm.store.SetSyncCursor(bucket, "", start); err != nil {
+		slog.Warn("set sync cursor failed", "bucket", bucket, "error", err)
+	}
+
+	sm.dirCache.InvalidateAll(bucket)
+
+	slog.Info("sync complete", "bucket", bucket, "objects", totalSynced, "duration", time.Since(start))
+	return nil
+}
+
+// syncOnePrefix lists a single directory level (delimiter="/") and writes
+// the resulting entries into the catalog. Returns the number of entries
+// ingested.
+func (sm *SyncManager) syncOnePrefix(bucket string, s3c *s3client.Client, prefix string) (int, error) {
 	var token *string
 	var totalSynced int
 
 	for {
 		select {
 		case <-sm.stopCh:
-			return nil
+			return totalSynced, nil
 		default:
 		}
 
-		result, err := s3c.ListObjects(context.Background(), "", "", token)
+		result, err := s3c.ListObjects(context.Background(), prefix, "/", token)
 		if err != nil {
-			return err
+			return totalSynced, err
 		}
 
 		entries := make([]Entry, 0, len(result.Objects)+len(result.CommonPrefixes))
@@ -123,6 +169,9 @@ func (sm *SyncManager) syncBucket(bucket string, s3c *s3client.Client) error {
 		}
 
 		for _, obj := range result.Objects {
+			if obj.Key == prefix {
+				continue
+			}
 			if strings.HasSuffix(obj.Key, "/") {
 				parent, name := splitKey(obj.Key)
 				entries = append(entries, Entry{
@@ -147,7 +196,7 @@ func (sm *SyncManager) syncBucket(bucket string, s3c *s3client.Client) error {
 
 		if len(entries) > 0 {
 			if err := sm.store.PutBatch(bucket, entries); err != nil {
-				return err
+				return totalSynced, err
 			}
 			totalSynced += len(entries)
 		}
@@ -158,14 +207,7 @@ func (sm *SyncManager) syncBucket(bucket string, s3c *s3client.Client) error {
 		token = result.ContinuationToken
 	}
 
-	if err := sm.store.SetSyncCursor(bucket, "", start); err != nil {
-		slog.Warn("set sync cursor failed", "bucket", bucket, "error", err)
-	}
-
-	sm.dirCache.InvalidateAll(bucket)
-
-	slog.Info("sync complete", "bucket", bucket, "objects", totalSynced, "duration", time.Since(start))
-	return nil
+	return totalSynced, nil
 }
 
 func (sm *SyncManager) SyncPrefix(bucket string, prefix string) error {

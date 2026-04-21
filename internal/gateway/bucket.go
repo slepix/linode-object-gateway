@@ -55,6 +55,16 @@ func (bm *BucketMount) Start() error {
 
 	root := fuseimpl.NewRoot(bm.s3, bm.cache, bm.catalog, bm.writeBack, bm.cfg.Name, bm.ttl, bm.cfg.SoleWriter)
 
+	// In sole-writer mode we're the source of truth, so the kernel can hold
+	// stat/entry results for the full TTL. In multi-writer mode we prefer
+	// short kernel caching and rely on the catalog for cheap revalidation.
+	kernelTTL := bm.ttl
+	if !bm.cfg.SoleWriter {
+		if kernelTTL > 10*time.Second {
+			kernelTTL = 10 * time.Second
+		}
+	}
+
 	opts := &fs.Options{
 		MountOptions: gofuse.MountOptions{
 			Name:          "s3gw",
@@ -64,8 +74,8 @@ func (bm *BucketMount) Start() error {
 			DirectMount:   true,
 			AllowOther:    true,
 		},
-		AttrTimeout:  &bm.ttl,
-		EntryTimeout: &bm.ttl,
+		AttrTimeout:  &kernelTTL,
+		EntryTimeout: &kernelTTL,
 	}
 
 	server, err := fs.Mount(bm.mountPoint, root, opts)

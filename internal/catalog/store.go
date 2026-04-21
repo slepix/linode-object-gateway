@@ -19,11 +19,16 @@ type Entry struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB // writer: serialized, SetMaxOpenConns(1)
+	readDB *sql.DB // reader pool: concurrent reads under WAL
 }
 
+const defaultReaderPoolSize = 8
+
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL")
+	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL"
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open catalog db: %w", err)
 	}
@@ -40,7 +45,19 @@ func NewStore(dbPath string) (*Store, error) {
 
 	db.SetMaxOpenConns(1)
 
-	return &Store{db: db}, nil
+	readDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open catalog read db: %w", err)
+	}
+	if _, err := readDB.Exec(`PRAGMA cache_size = -64000`); err != nil {
+		db.Close()
+		readDB.Close()
+		return nil, fmt.Errorf("set reader cache_size: %w", err)
+	}
+	readDB.SetMaxOpenConns(defaultReaderPoolSize)
+
+	return &Store{db: db, readDB: readDB}, nil
 }
 
 func createSchema(db *sql.DB) error {
@@ -60,6 +77,13 @@ func createSchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_objects_parent
 			ON objects(bucket, parent);
 
+		-- Covering index: listDir selects (key, parent, name, size, etag, modified, is_dir)
+		-- ordered by (is_dir DESC, name ASC). Listing these columns after the
+		-- (bucket, parent, is_dir, name) prefix lets SQLite answer the query
+		-- entirely from the index without touching the table heap.
+		CREATE INDEX IF NOT EXISTS idx_objects_listdir_covering
+			ON objects(bucket, parent, is_dir, name, key, size, etag, modified);
+
 		CREATE TABLE IF NOT EXISTS sync_cursors (
 			bucket TEXT NOT NULL,
 			prefix TEXT NOT NULL,
@@ -74,11 +98,16 @@ func createSchema(db *sql.DB) error {
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
+	err1 := s.readDB.Close()
+	err2 := s.db.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }
 
 func (s *Store) ListDir(bucket, parent string) ([]Entry, error) {
-	rows, err := s.db.Query(
+	rows, err := s.readDB.Query(
 		`SELECT key, parent, name, size, etag, modified, is_dir
 		 FROM objects WHERE bucket = ? AND parent = ?
 		 ORDER BY is_dir DESC, name ASC`,
@@ -105,7 +134,7 @@ func (s *Store) ListDir(bucket, parent string) ([]Entry, error) {
 func (s *Store) Lookup(bucket, key string) (*Entry, error) {
 	var e Entry
 	var modUnix int64
-	err := s.db.QueryRow(
+	err := s.readDB.QueryRow(
 		`SELECT key, parent, name, size, etag, modified, is_dir
 		 FROM objects WHERE bucket = ? AND key = ?`,
 		bucket, key,
@@ -182,7 +211,7 @@ func (s *Store) DeletePrefix(bucket, prefix string) error {
 
 func (s *Store) HasDir(bucket, parent string) (bool, error) {
 	var count int
-	err := s.db.QueryRow(
+	err := s.readDB.QueryRow(
 		`SELECT COUNT(*) FROM objects WHERE bucket = ? AND parent = ? LIMIT 1`,
 		bucket, parent,
 	).Scan(&count)
@@ -194,7 +223,7 @@ func (s *Store) HasDir(bucket, parent string) (bool, error) {
 
 func (s *Store) GetSyncCursor(bucket, prefix string) (time.Time, error) {
 	var ts int64
-	err := s.db.QueryRow(
+	err := s.readDB.QueryRow(
 		`SELECT synced_at FROM sync_cursors WHERE bucket = ? AND prefix = ?`,
 		bucket, prefix,
 	).Scan(&ts)
@@ -220,9 +249,33 @@ func (s *Store) SetSyncCursor(bucket, prefix string, t time.Time) error {
 	return nil
 }
 
+// KnownDirs returns all directory keys (prefixes) recorded for a bucket.
+// Used by incremental sync to bound traversal to prefixes the user has
+// actually touched.
+func (s *Store) KnownDirs(bucket string) ([]string, error) {
+	rows, err := s.readDB.Query(
+		`SELECT key FROM objects WHERE bucket = ? AND is_dir = 1`,
+		bucket,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("known dirs: %w", err)
+	}
+	defer rows.Close()
+
+	var dirs []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, k)
+	}
+	return dirs, rows.Err()
+}
+
 func (s *Store) Count(bucket string) (int64, error) {
 	var count int64
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM objects WHERE bucket = ?`, bucket).Scan(&count)
+	err := s.readDB.QueryRow(`SELECT COUNT(*) FROM objects WHERE bucket = ?`, bucket).Scan(&count)
 	return count, err
 }
 

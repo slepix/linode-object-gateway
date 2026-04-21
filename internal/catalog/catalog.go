@@ -89,6 +89,19 @@ func (c *Catalog) Lookup(bucket, key string) (*Entry, error) {
 		return nil, nil
 	}
 
+	// Fast path: if the parent directory is in the dir cache (e.g. just
+	// populated by a Readdir), serve the Lookup directly from memory
+	// without touching SQLite. This is what makes ReaddirPlus cheap.
+	parent, name := SplitKeyExported(key)
+	if cached, ok := c.dirCache.Get(bucket, parent); ok {
+		for i := range cached {
+			if cached[i].Name == name {
+				e := cached[i]
+				return &e, nil
+			}
+		}
+	}
+
 	sfKey := fmt.Sprintf("lookup:%s/%s", bucket, key)
 	val, err, _ := c.sfGroup.Do(sfKey, func() (interface{}, error) {
 		return c.store.Lookup(bucket, key)
@@ -120,6 +133,21 @@ func (c *Catalog) Put(bucket string, e *Entry) error {
 	}
 	c.negCache.Remove(bucket, e.Key)
 	c.dirCache.Invalidate(bucket, e.Parent)
+	return nil
+}
+
+func (c *Catalog) PutBatch(bucket string, entries []Entry) error {
+	if err := c.store.PutBatch(bucket, entries); err != nil {
+		return err
+	}
+	seenParents := make(map[string]struct{}, len(entries))
+	for i := range entries {
+		c.negCache.Remove(bucket, entries[i].Key)
+		if _, ok := seenParents[entries[i].Parent]; !ok {
+			seenParents[entries[i].Parent] = struct{}{}
+			c.dirCache.Invalidate(bucket, entries[i].Parent)
+		}
+	}
 	return nil
 }
 
