@@ -12,16 +12,16 @@ type dirCacheEntry struct {
 
 type DirCache struct {
 	mu      sync.RWMutex
-	items   map[string]dirCacheEntry
+	buckets map[string]map[string]dirCacheEntry
 	ttl     time.Duration
 	stopCh  chan struct{}
 }
 
 func NewDirCache(ttl time.Duration) *DirCache {
 	dc := &DirCache{
-		items:  make(map[string]dirCacheEntry),
-		ttl:    ttl,
-		stopCh: make(chan struct{}),
+		buckets: make(map[string]map[string]dirCacheEntry),
+		ttl:     ttl,
+		stopCh:  make(chan struct{}),
 	}
 	go dc.reaper()
 	return dc
@@ -30,7 +30,11 @@ func NewDirCache(ttl time.Duration) *DirCache {
 func (dc *DirCache) Get(bucket, parent string) ([]Entry, bool) {
 	dc.mu.RLock()
 	defer dc.mu.RUnlock()
-	e, ok := dc.items[dirKey(bucket, parent)]
+	b, ok := dc.buckets[bucket]
+	if !ok {
+		return nil, false
+	}
+	e, ok := b[parent]
 	if !ok || time.Now().After(e.expires) {
 		return nil, false
 	}
@@ -42,9 +46,14 @@ func (dc *DirCache) Get(bucket, parent string) ([]Entry, bool) {
 func (dc *DirCache) Set(bucket, parent string, entries []Entry) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
+	b, ok := dc.buckets[bucket]
+	if !ok {
+		b = make(map[string]dirCacheEntry)
+		dc.buckets[bucket] = b
+	}
 	cp := make([]Entry, len(entries))
 	copy(cp, entries)
-	dc.items[dirKey(bucket, parent)] = dirCacheEntry{
+	b[parent] = dirCacheEntry{
 		entries: cp,
 		expires: time.Now().Add(dc.ttl),
 	}
@@ -53,18 +62,15 @@ func (dc *DirCache) Set(bucket, parent string, entries []Entry) {
 func (dc *DirCache) Invalidate(bucket, parent string) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	delete(dc.items, dirKey(bucket, parent))
+	if b, ok := dc.buckets[bucket]; ok {
+		delete(b, parent)
+	}
 }
 
 func (dc *DirCache) InvalidateAll(bucket string) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	pfx := bucket + "/"
-	for k := range dc.items {
-		if len(k) >= len(pfx) && k[:len(pfx)] == pfx {
-			delete(dc.items, k)
-		}
-	}
+	delete(dc.buckets, bucket)
 }
 
 func (dc *DirCache) Stop() {
@@ -81,16 +87,17 @@ func (dc *DirCache) reaper() {
 		case <-ticker.C:
 			dc.mu.Lock()
 			now := time.Now()
-			for k, e := range dc.items {
-				if now.After(e.expires) {
-					delete(dc.items, k)
+			for bucket, b := range dc.buckets {
+				for k, e := range b {
+					if now.After(e.expires) {
+						delete(b, k)
+					}
+				}
+				if len(b) == 0 {
+					delete(dc.buckets, bucket)
 				}
 			}
 			dc.mu.Unlock()
 		}
 	}
-}
-
-func dirKey(bucket, parent string) string {
-	return bucket + "/" + parent
 }

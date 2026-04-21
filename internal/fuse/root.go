@@ -24,7 +24,7 @@ func NewRoot(s3c *s3client.Client, cm *cache.Manager, cat *catalog.Catalog, wb *
 		catalog:    cat,
 		writeBack:  wb,
 		bucket:     bucket,
-		ttl:        int64(ttl),
+		ttl:        ttl,
 		soleWriter: soleWriter,
 	}
 	root.prefix = ""

@@ -73,9 +73,6 @@ func (m *Manager) Get(bucket, key string, ttl time.Duration, soleWriter bool) (s
 	}
 
 	if soleWriter {
-		if time.Since(entry.CachedAt) > ttl {
-			return entry.LocalPath, entry, false, nil
-		}
 		m.meta.Touch(bucket, key)
 		return entry.LocalPath, entry, true, nil
 	}

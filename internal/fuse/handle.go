@@ -45,7 +45,7 @@ func newHandle(f *FileNode) (*Handle, error) {
 		s3:         f.bctx.s3,
 		bucket:     f.bctx.bucket,
 		key:        f.key,
-		ttl:        time.Duration(f.bctx.ttl),
+		ttl:        f.bctx.ttl,
 		soleWriter: f.bctx.soleWriter,
 		tmpFile:    tmpFile,
 	}, nil
@@ -122,9 +122,7 @@ func (h *Handle) fetchFromS3AndCache(ctx context.Context, dest []byte, off int64
 	}
 	cacheTmp.Close()
 
-	h.file.size = meta.Size
-	h.file.etag = meta.ETag
-	h.file.mtime = meta.LastModified
+	h.file.update(meta.Size, meta.ETag, meta.LastModified)
 
 	n, err := cm.Store().Read(h.bucket, h.key, off, dest)
 	if err != nil && err != io.EOF {
@@ -204,8 +202,7 @@ func (h *Handle) Flush(ctx context.Context) syscall.Errno {
 			cacheFile.Close()
 		}
 
-		h.file.size = size
-		h.file.mtime = time.Now()
+		h.file.update(size, h.file.etagSnapshot(), time.Now())
 		h.dirty = false
 
 		job := &catalog.UploadJob{
@@ -217,22 +214,22 @@ func (h *Handle) Flush(ctx context.Context) syscall.Errno {
 
 		if err := wb.Submit(job); err != nil {
 			slog.Warn("write-back queue full, uploading synchronously", "key", h.key)
-			return h.syncUpload(size)
+			return h.syncUpload(ctx, size)
 		}
 
 		return 0
 	}
 
-	return h.syncUpload(size)
+	return h.syncUpload(ctx, size)
 }
 
-func (h *Handle) syncUpload(size int64) syscall.Errno {
+func (h *Handle) syncUpload(ctx context.Context, size int64) syscall.Errno {
 	if _, err := h.tmpFile.Seek(0, io.SeekStart); err != nil {
 		slog.Error("seek failed on sync upload", "key", h.key, "error", err)
 		return syscall.EIO
 	}
 
-	objMeta, err := h.s3.PutObject(context.Background(), h.key, h.tmpFile, size)
+	objMeta, err := h.s3.PutObject(ctx, h.key, h.tmpFile, size)
 	if err != nil {
 		slog.Error("S3 PUT FAILED - write rejected", "key", h.key, "error", err)
 		return syscall.EIO
@@ -256,9 +253,7 @@ func (h *Handle) syncUpload(size int64) syscall.Errno {
 		Modified: time.Now(),
 	})
 
-	h.file.size = size
-	h.file.etag = objMeta.ETag
-	h.file.mtime = time.Now()
+	h.file.update(size, objMeta.ETag, time.Now())
 	h.dirty = false
 
 	return 0

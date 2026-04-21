@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -11,14 +12,14 @@ type negEntry struct {
 
 type NegCache struct {
 	mu      sync.RWMutex
-	entries map[string]negEntry
+	buckets map[string]map[string]negEntry
 	ttl     time.Duration
 	stopCh  chan struct{}
 }
 
 func NewNegCache(ttl time.Duration) *NegCache {
 	nc := &NegCache{
-		entries: make(map[string]negEntry),
+		buckets: make(map[string]map[string]negEntry),
 		ttl:     ttl,
 		stopCh:  make(chan struct{}),
 	}
@@ -29,7 +30,11 @@ func NewNegCache(ttl time.Duration) *NegCache {
 func (nc *NegCache) Contains(bucket, key string) bool {
 	nc.mu.RLock()
 	defer nc.mu.RUnlock()
-	e, ok := nc.entries[negKey(bucket, key)]
+	b, ok := nc.buckets[bucket]
+	if !ok {
+		return false
+	}
+	e, ok := b[key]
 	if !ok {
 		return false
 	}
@@ -39,22 +44,32 @@ func (nc *NegCache) Contains(bucket, key string) bool {
 func (nc *NegCache) Add(bucket, key string) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
-	nc.entries[negKey(bucket, key)] = negEntry{expires: time.Now().Add(nc.ttl)}
+	b, ok := nc.buckets[bucket]
+	if !ok {
+		b = make(map[string]negEntry)
+		nc.buckets[bucket] = b
+	}
+	b[key] = negEntry{expires: time.Now().Add(nc.ttl)}
 }
 
 func (nc *NegCache) Remove(bucket, key string) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
-	delete(nc.entries, negKey(bucket, key))
+	if b, ok := nc.buckets[bucket]; ok {
+		delete(b, key)
+	}
 }
 
 func (nc *NegCache) RemovePrefix(bucket, prefix string) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
-	pfx := bucket + "/" + prefix
-	for k := range nc.entries {
-		if len(k) >= len(pfx) && k[:len(pfx)] == pfx {
-			delete(nc.entries, k)
+	b, ok := nc.buckets[bucket]
+	if !ok {
+		return
+	}
+	for k := range b {
+		if strings.HasPrefix(k, prefix) {
+			delete(b, k)
 		}
 	}
 }
@@ -73,16 +88,17 @@ func (nc *NegCache) reaper() {
 		case <-ticker.C:
 			nc.mu.Lock()
 			now := time.Now()
-			for k, e := range nc.entries {
-				if now.After(e.expires) {
-					delete(nc.entries, k)
+			for bucket, b := range nc.buckets {
+				for k, e := range b {
+					if now.After(e.expires) {
+						delete(b, k)
+					}
+				}
+				if len(b) == 0 {
+					delete(nc.buckets, bucket)
 				}
 			}
 			nc.mu.Unlock()
 		}
 	}
-}
-
-func negKey(bucket, key string) string {
-	return bucket + "/" + key
 }

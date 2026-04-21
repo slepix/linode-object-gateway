@@ -48,25 +48,43 @@ func (d *DirNode) Lookup(ctx context.Context, name string, out *gofuse.EntryOut)
 
 	// Try catalog for directory
 	dirKey := childKey + "/"
-	if entry, err := cat.Lookup(d.bctx.bucket, dirKey); err == nil && entry != nil && entry.IsDir {
+	entry, err := cat.Lookup(d.bctx.bucket, dirKey)
+	if err != nil {
+		slog.Error("catalog lookup failed", "key", dirKey, "error", err)
+		return nil, syscall.EIO
+	}
+	if entry != nil && entry.IsDir {
 		return d.makeDirInode(ctx, dirKey, out), 0
 	}
 
 	// Try catalog for directory by checking children
-	if has, err := cat.HasDir(d.bctx.bucket, dirKey); err == nil && has {
+	has, err := cat.HasDir(d.bctx.bucket, dirKey)
+	if err != nil {
+		slog.Error("catalog hasdir failed", "key", dirKey, "error", err)
+		return nil, syscall.EIO
+	}
+	if has {
 		return d.makeDirInode(ctx, dirKey, out), 0
 	}
 
 	// Try catalog for file
-	if entry, err := cat.Lookup(d.bctx.bucket, childKey); err == nil && entry != nil && !entry.IsDir {
+	entry, err = cat.Lookup(d.bctx.bucket, childKey)
+	if err != nil {
+		slog.Error("catalog lookup failed", "key", childKey, "error", err)
+		return nil, syscall.EIO
+	}
+	if entry != nil && !entry.IsDir {
 		return d.makeFileInode(ctx, childKey, entry.Size, entry.ETag, entry.Modified, out), 0
 	}
 
 	// Catalog miss -- fall back to S3
 	dirPrefix := childKey + "/"
-	listResult, err := d.bctx.s3.ListObjects(ctx, dirPrefix, "/", nil)
-	if err == nil && (len(listResult.Objects) > 0 || len(listResult.CommonPrefixes) > 0) {
-		// Populate catalog from the list result
+	listResult, listErr := d.bctx.s3.ListObjects(ctx, dirPrefix, "/", nil)
+	if listErr != nil {
+		slog.Error("lookup list failed", "prefix", dirPrefix, "error", listErr)
+		return nil, s3client.TranslateError(listErr)
+	}
+	if len(listResult.Objects) > 0 || len(listResult.CommonPrefixes) > 0 {
 		d.ingestListResult(dirPrefix, listResult)
 		return d.makeDirInode(ctx, dirPrefix, out), 0
 	}

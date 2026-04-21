@@ -33,16 +33,21 @@ type WriteBackQueue struct {
 	retryDelay time.Duration
 	wg         sync.WaitGroup
 	stopCh     chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
 	getClient  func(bucket string) *s3client.Client
 }
 
 func NewWriteBackQueue(workers, queueSize, maxRetries int, retryDelay time.Duration, getClient func(string) *s3client.Client) *WriteBackQueue {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &WriteBackQueue{
 		jobs:       make(chan *UploadJob, queueSize),
 		workers:    workers,
 		maxRetries: maxRetries,
 		retryDelay: retryDelay,
 		stopCh:     make(chan struct{}),
+		ctx:        ctx,
+		cancel:     cancel,
 		getClient:  getClient,
 	}
 }
@@ -58,6 +63,7 @@ func (wbq *WriteBackQueue) Start() {
 func (wbq *WriteBackQueue) Stop() {
 	close(wbq.stopCh)
 	wbq.wg.Wait()
+	wbq.cancel()
 	slog.Info("write-back queue stopped")
 }
 
@@ -146,7 +152,7 @@ func (wbq *WriteBackQueue) upload(s3c *s3client.Client, job *UploadJob) (*s3clie
 		return nil, fmt.Errorf("stat upload file: %w", err)
 	}
 
-	meta, err := s3c.PutObject(context.Background(), job.Key, io.Reader(f), stat.Size())
+	meta, err := s3c.PutObject(wbq.ctx, job.Key, io.Reader(f), stat.Size())
 	if err != nil {
 		return nil, fmt.Errorf("s3 put: %w", err)
 	}

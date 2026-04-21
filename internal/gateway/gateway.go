@@ -78,6 +78,9 @@ func (g *Gateway) Start() error {
 			for j := i - 1; j >= 0; j-- {
 				g.mounts[j].Stop()
 			}
+			// Wait for previously-started wait goroutines to exit
+			// before returning, so we don't leak them.
+			g.wg.Wait()
 			if g.writeBack != nil {
 				g.writeBack.Stop()
 			}

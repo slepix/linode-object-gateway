@@ -1,8 +1,6 @@
 package s3client
 
 import (
-	"context"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -37,8 +35,4 @@ func (c *Client) Bucket() string {
 
 func (c *Client) Raw() *s3.Client {
 	return c.inner
-}
-
-func (c *Client) ctx() context.Context {
-	return context.Background()
 }
