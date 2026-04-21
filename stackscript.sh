@@ -299,7 +299,7 @@ configure_systemd_service() {
 }
 
 configure_nfs() {
-    echo ">>> Configuring NFS exports..."
+    echo ">>> Writing NFS exports (service will be started after s3gw is up)..."
 
     local exports_file="/etc/exports"
 
@@ -315,20 +315,20 @@ configure_nfs() {
         add_nfs_export "$BUCKET3_NAME"
     fi
 
-    exportfs -ra
-    systemctl enable --now nfs-kernel-server
+    systemctl enable nfs-kernel-server
 
-    echo ">>> NFS exports configured."
+    echo ">>> NFS exports written."
 }
 
 add_nfs_export() {
     local name="$1"
     local mount_point="${MOUNT_BASE}/${name}"
-    echo "${mount_point}  ${NFS_ALLOWED_NETWORK}(rw,sync,no_subtree_check,no_root_squash,fsid=$(echo "$name" | cksum | cut -d' ' -f1))" >> /etc/exports
+    # crossmnt lets NFS follow the FUSE mount that lands on this path after s3gw starts.
+    echo "${mount_point}  ${NFS_ALLOWED_NETWORK}(rw,sync,no_subtree_check,no_root_squash,crossmnt,fsid=$(echo "$name" | cksum | cut -d' ' -f1))" >> /etc/exports
 }
 
 configure_samba() {
-    echo ">>> Configuring Samba..."
+    echo ">>> Configuring Samba (service will be started after s3gw is up)..."
 
     useradd -M -s /usr/sbin/nologin "$SAMBA_USER" 2>/dev/null || true
 
@@ -351,10 +351,10 @@ EOF
         add_samba_share "$BUCKET3_NAME"
     fi
 
-    systemctl enable --now smbd
-    systemctl enable --now nmbd
+    systemctl enable smbd
+    systemctl enable nmbd
 
-    echo ">>> Samba configured."
+    echo ">>> Samba configuration written."
 }
 
 add_samba_share() {
@@ -406,6 +406,26 @@ configure_firewall() {
     echo ">>> Firewall configured."
 }
 
+wait_for_mounts() {
+    echo ">>> Waiting for FUSE mounts to appear..."
+    local names=("$BUCKET1_NAME")
+    [ -n "$BUCKET2_NAME" ] && names+=("$BUCKET2_NAME")
+    [ -n "$BUCKET3_NAME" ] && names+=("$BUCKET3_NAME")
+
+    for name in "${names[@]}"; do
+        local mp="${MOUNT_BASE}/${name}"
+        local tries=30
+        while ! mountpoint -q "$mp"; do
+            tries=$((tries - 1))
+            if [ "$tries" -le 0 ]; then
+                echo "WARNING: ${mp} never mounted; NFS/Samba exports may be empty."
+                break
+            fi
+            sleep 1
+        done
+    done
+}
+
 start_services() {
     echo ">>> Starting s3gw..."
     systemctl start s3gw
@@ -416,6 +436,20 @@ start_services() {
         echo ">>> s3gw is running."
     else
         echo "WARNING: s3gw may not have started correctly. Check: journalctl -u s3gw"
+    fi
+
+    wait_for_mounts
+
+    if [ "$SHARING_PROTOCOL" = "nfs" ] || [ "$SHARING_PROTOCOL" = "both" ]; then
+        echo ">>> Starting NFS server..."
+        systemctl start nfs-kernel-server
+        exportfs -ra
+    fi
+
+    if [ "$SHARING_PROTOCOL" = "samba" ] || [ "$SHARING_PROTOCOL" = "both" ]; then
+        echo ">>> Starting Samba..."
+        systemctl start smbd
+        systemctl start nmbd
     fi
 }
 
